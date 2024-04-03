@@ -54,6 +54,8 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.TestTemplateInvocationContext;
 import org.junit.jupiter.api.extension.TestTemplateInvocationContextProvider;
 import org.junit.platform.commons.util.AnnotationUtils;
+import software.amazon.awssdk.services.rds.model.BlueGreenDeployment;
+import software.amazon.awssdk.services.rds.model.DBInstance;
 import software.amazon.jdbc.ConnectionProviderManager;
 import software.amazon.jdbc.HikariPooledConnectionProvider;
 import software.amazon.jdbc.dialect.DialectManager;

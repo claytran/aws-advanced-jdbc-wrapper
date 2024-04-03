@@ -54,7 +54,9 @@ import org.testcontainers.containers.Network;
 import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.shaded.org.apache.commons.lang3.NotImplementedException;
 import org.testcontainers.utility.MountableFile;
+import software.amazon.awssdk.services.rds.model.BlueGreenDeployment;
 import software.amazon.awssdk.services.rds.model.DBCluster;
+import software.amazon.awssdk.services.rds.model.DBInstance;
 import software.amazon.jdbc.util.StringUtils;
 
 public class TestEnvironment implements AutoCloseable {
@@ -87,7 +89,10 @@ public class TestEnvironment implements AutoCloseable {
   private int numOfInstances;
   private boolean reuseAuroraDbCluster;
   private String auroraClusterName; // "cluster-mysql"
-  private String auroraClusterDomain; // "XYZ.us-west-2.rds.amazonaws.com"
+  private boolean reuseRdsDbInstance;
+  private String rdsInstanceName; // "instance-name"
+
+  private String rdsClusterDomain; // "XYZ.us-west-2.rds.amazonaws.com"
   private String rdsEndpoint; // "https://rds-int.amazon.com"
 
   private String awsAccessKeyId;
@@ -145,8 +150,13 @@ public class TestEnvironment implements AutoCloseable {
         break;
       case AURORA:
       case RDS_MULTI_AZ_CLUSTER:
+      case RDS_MULTI_AZ_INSTANCE:
         env = createAuroraOrMultiAzEnvironment(request);
         authorizeIP(env);
+
+        if (request.getFeatures().contains(TestEnvironmentFeatures.BLUE_GREEN_DEPLOYMENT)) {
+          createBlueGreenDeployment(env);
+        }
 
         break;
 
@@ -209,7 +219,7 @@ public class TestEnvironment implements AutoCloseable {
       if (result instanceof TestEnvironment) {
         TestEnvironment resultTestEnvironment = (TestEnvironment) result;
         LOGGER.finer(() -> String.format("Use pre-created DB cluster: %s.cluster-%s",
-            resultTestEnvironment.auroraClusterName, resultTestEnvironment.auroraClusterDomain));
+            resultTestEnvironment.auroraClusterName, resultTestEnvironment.rdsClusterDomain));
 
         return resultTestEnvironment;
       }
@@ -219,18 +229,64 @@ public class TestEnvironment implements AutoCloseable {
     } else {
       TestEnvironment env = new TestEnvironment(request);
       initDatabaseParams(env);
-      createDbCluster(env);
 
-      if (request.getFeatures().contains(TestEnvironmentFeatures.IAM)) {
-        if (request.getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
-          throw new RuntimeException("IAM isn't supported by " + DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER);
-        }
+      if (request.getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_INSTANCE) {
+        initAwsCredentials(env);
+        createMultiAzInstance(env);
         configureIamAccess(env);
+
+      } else {
+        createDbCluster(env);
+
+        if (request.getFeatures().contains(TestEnvironmentFeatures.IAM)) {
+          if (request.getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
+
+            throw new RuntimeException("IAM isn't supported by " + DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER);
+          }
+          configureIamAccess(env);
+        }
       }
 
       return env;
     }
 
+  }
+
+  private static void createBlueGreenDeployment(TestEnvironment env) {
+
+    if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.AURORA) {
+      DBCluster clusterInfo = env.auroraUtil.getClusterInfo(env.auroraClusterName);
+      if (env.reuseAuroraDbCluster) {
+        BlueGreenDeployment deployment = env.auroraUtil.getBlueGreenDeploymentBySource(clusterInfo.dbClusterArn());
+        if (deployment != null) {
+          env.info.setBlueGreenDeploymentId(deployment.blueGreenDeploymentIdentifier());
+          return;
+        }
+      }
+
+      // otherwise, create a new BG deployment
+      final String blueGreenId = env.auroraUtil.createBueGreenDeployment(
+          env.rdsInstanceName, clusterInfo.dbClusterArn());
+      env.info.setBlueGreenDeploymentId(blueGreenId);
+
+    } else if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_INSTANCE) {
+      DBInstance instanceInfo = env.auroraUtil.getRdsInstanceInfo(env.rdsInstanceName);
+      if (env.reuseRdsDbInstance) {
+        BlueGreenDeployment deployment = env.auroraUtil.getBlueGreenDeploymentBySource(instanceInfo.dbInstanceArn());
+        if (deployment != null) {
+          env.info.setBlueGreenDeploymentId(deployment.blueGreenDeploymentIdentifier());
+          return;
+        }
+      }
+
+      // otherwise, create a new BG deployment
+      final String blueGreenId = env.auroraUtil.createBueGreenDeployment(env.rdsInstanceName,
+          instanceInfo.dbInstanceArn());
+      env.info.setBlueGreenDeploymentId(blueGreenId);
+
+    } else {
+      LOGGER.warning("BG Deployments are supported for RDS MultiAz Instances and Aurora clusters only. Proceed without creating BG Deployment.");
+    }
   }
 
   private static void createDatabaseContainers(TestEnvironment env) {
@@ -337,11 +393,21 @@ public class TestEnvironment implements AutoCloseable {
         initAwsCredentials(env);
 
         env.numOfInstances = env.info.getRequest().getNumOfInstances();
-        if (env.numOfInstances < 1 || env.numOfInstances > 15) {
-          LOGGER.warning(
-              env.numOfInstances + " instances were requested but the requested number must be "
-                  + "between 1 and 15. 5 instances will be used as a default.");
-          env.numOfInstances = 5;
+        if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.AURORA) {
+          if (env.numOfInstances < 1 || env.numOfInstances > 15) {
+            LOGGER.warning(
+                env.numOfInstances + " instances were requested but the requested number must be "
+                    + "between 1 and 15. 5 instances will be used as a default.");
+            env.numOfInstances = 5;
+          }
+        }
+        if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
+          if (env.numOfInstances != 3) {
+            LOGGER.warning(
+                env.numOfInstances + " instances were requested but the requested number must be 3. "
+                    + "3 instances will be used as a default.");
+            env.numOfInstances = 3;
+          }
         }
 
         createDbCluster(env, env.numOfInstances);
@@ -360,7 +426,7 @@ public class TestEnvironment implements AutoCloseable {
 
     env.reuseAuroraDbCluster = config.reuseRdsCluster;
     env.auroraClusterName = config.rdsClusterName; // "cluster-mysql"
-    env.auroraClusterDomain = config.rdsClusterDomain; // "XYZ.us-west-2.rds.amazonaws.com"
+    env.rdsClusterDomain = config.rdsClusterDomain; // "XYZ.us-west-2.rds.amazonaws.com"
     env.rdsEndpoint = config.rdsEndpoint; // "XYZ.us-west-2.rds.amazonaws.com"
     env.info.setRdsEndpoint(env.rdsEndpoint);
 
@@ -375,7 +441,7 @@ public class TestEnvironment implements AutoCloseable {
     ArrayList<TestInstanceInfo> instances = new ArrayList<>();
 
     if (env.reuseAuroraDbCluster) {
-      if (StringUtils.isNullOrEmpty(env.auroraClusterDomain)) {
+      if (StringUtils.isNullOrEmpty(env.rdsClusterDomain)) {
         throw new RuntimeException("Environment variable RDS_CLUSTER_DOMAIN is required.");
       }
 
@@ -384,10 +450,10 @@ public class TestEnvironment implements AutoCloseable {
             "It's requested to reuse existing DB cluster but it doesn't exist: "
                 + env.auroraClusterName
                 + "."
-                + env.auroraClusterDomain);
+                + env.rdsClusterDomain);
       }
       LOGGER.finer(
-          "Reuse existing cluster " + env.auroraClusterName + ".cluster-" + env.auroraClusterDomain);
+          "Reuse existing cluster " + env.auroraClusterName + ".cluster-" + env.rdsClusterDomain);
 
       DBCluster clusterInfo = env.auroraUtil.getClusterInfo(env.auroraClusterName);
 
@@ -436,7 +502,7 @@ public class TestEnvironment implements AutoCloseable {
         LOGGER.finer(
             "Using " + engine + " " + engineVersion);
 
-        env.auroraClusterDomain =
+        env.rdsClusterDomain =
             env.auroraUtil.createCluster(
                 env.info.getDatabaseInfo().getUsername(),
                 env.info.getDatabaseInfo().getPassword(),
@@ -451,7 +517,7 @@ public class TestEnvironment implements AutoCloseable {
         env.info.setDatabaseEngine(engine);
         env.info.setDatabaseEngineVersion(engineVersion);
         LOGGER.finer(
-            "Created a new cluster " + env.auroraClusterName + ".cluster-" + env.auroraClusterDomain);
+            "Created a new cluster " + env.auroraClusterName + ".cluster-" + env.rdsClusterDomain);
       } catch (Exception e) {
 
         LOGGER.finer("Error creating a cluster " + env.auroraClusterName + ". " + e.getMessage());
@@ -471,12 +537,12 @@ public class TestEnvironment implements AutoCloseable {
 
     env.info
         .getDatabaseInfo()
-        .setClusterEndpoint(env.auroraClusterName + ".cluster-" + env.auroraClusterDomain, port);
+        .setClusterEndpoint(env.auroraClusterName + ".cluster-" + env.rdsClusterDomain, port);
     env.info
         .getDatabaseInfo()
         .setClusterReadOnlyEndpoint(
-            env.auroraClusterName + ".cluster-ro-" + env.auroraClusterDomain, port);
-    env.info.getDatabaseInfo().setInstanceEndpointSuffix(env.auroraClusterDomain, port);
+            env.auroraClusterName + ".cluster-ro-" + env.rdsClusterDomain, port);
+    env.info.getDatabaseInfo().setInstanceEndpointSuffix(env.rdsClusterDomain, port);
 
     env.info.getDatabaseInfo().getInstances().clear();
     env.info.getDatabaseInfo().getInstances().addAll(instances);
@@ -485,6 +551,133 @@ public class TestEnvironment implements AutoCloseable {
 
     final DatabaseEngineDeployment deployment = env.info.getRequest().getDatabaseEngineDeployment();
     final DatabaseEngine engine = env.info.getRequest().getDatabaseEngine();
+
+    if (DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER.equals(deployment) && DatabaseEngine.PG.equals(engine)) {
+      DriverHelper.registerDriver(engine);
+
+      try (Connection conn = DriverHelper.getDriverConnection(env.info);
+          Statement stmt = conn.createStatement()) {
+        stmt.execute("CREATE EXTENSION IF NOT EXISTS rds_tools");
+      } catch (SQLException e) {
+        throw new RuntimeException("An exception occurred while creating the rds_tools extension.", e);
+      }
+    }
+  }
+
+  private static void createMultiAzInstance(TestEnvironment env) throws URISyntaxException {
+    env.info.setRegion(
+        !StringUtils.isNullOrEmpty(config.rdsDbRegion)
+            ? config.rdsDbRegion
+            : "us-east-2");
+
+    env.reuseRdsDbInstance = config.reuseRdsInstance;
+    env.rdsInstanceName = config.rdsInstanceName; // "cluster-mysql"
+    env.rdsClusterDomain = config.rdsClusterDomain; // "XYZ.us-west-2.rds.amazonaws.com"
+    env.rdsEndpoint = config.rdsEndpoint; // "XYZ.us-west-2.rds.amazonaws.com"
+    env.info.setRdsEndpoint(env.rdsEndpoint);
+
+    env.auroraUtil =
+        new AuroraTestUtility(
+            env.info.getRegion(),
+            env.rdsEndpoint,
+            env.awsAccessKeyId,
+            env.awsSecretAccessKey,
+            env.awsSessionToken);
+
+    ArrayList<TestInstanceInfo> instances = new ArrayList<>();
+
+    if (env.reuseRdsDbInstance) {
+      if (StringUtils.isNullOrEmpty(env.rdsClusterDomain)) {
+        throw new RuntimeException("Environment variable RDS_CLUSTER_DOMAIN is required.");
+      }
+
+      if (!env.auroraUtil.doesInstanceExist(env.rdsInstanceName)) {
+        throw new RuntimeException(
+            "It's requested to reuse existing RDS instance but it doesn't exist: "
+                + env.rdsInstanceName
+                + "."
+                + env.rdsClusterDomain);
+      }
+      LOGGER.finer(
+          "Reuse existing RDS Instance " + env.rdsInstanceName + ".cluster-" + env.rdsClusterDomain);
+
+      DBInstance instanceInfo = env.auroraUtil.getRdsInstanceInfo(env.rdsInstanceName);
+
+      DatabaseEngine existingRdsInstanceDatabaseEngine = env.auroraUtil.getRdsInstanceEngine(instanceInfo);
+      if (existingRdsInstanceDatabaseEngine != env.info.getRequest().getDatabaseEngine()) {
+        throw new RuntimeException(
+            "Existing RDS Instance is "
+                + existingRdsInstanceDatabaseEngine
+                + " instance. "
+                + env.info.getRequest().getDatabaseEngine()
+                + " is expected.");
+      }
+
+      env.info.setDatabaseEngine(instanceInfo.engine());
+      env.info.setDatabaseEngineVersion(instanceInfo.engineVersion());
+      instances.add(new TestInstanceInfo(
+          instanceInfo.dbInstanceIdentifier(),
+          instanceInfo.endpoint().address(),
+          instanceInfo.endpoint().port()));
+
+    } else {
+      if (StringUtils.isNullOrEmpty(env.rdsInstanceName)) {
+        env.rdsInstanceName = getRandomName(env.info.getRequest());
+        LOGGER.finer("RDS Instance to create: " + env.rdsInstanceName);
+      }
+
+      try {
+        String engine = getDbEngine(env.info.getRequest());
+        String engineVersion = getDbEngineVersion(env);
+        if (StringUtils.isNullOrEmpty(engineVersion)) {
+          throw new RuntimeException("Failed to get engine version.");
+        }
+        String instanceClass = getDbInstanceClass(env.info.getRequest());
+
+        LOGGER.finer(
+            "Using " + engine + " " + engineVersion);
+
+        env.rdsClusterDomain =
+            env.auroraUtil.createMultiAzInstance(
+                env.info.getDatabaseInfo().getUsername(),
+                env.info.getDatabaseInfo().getPassword(),
+                env.info.getDatabaseInfo().getDefaultDbName(),
+                env.rdsInstanceName,
+                env.info.getRequest().getDatabaseEngineDeployment(),
+                engine,
+                instanceClass,
+                engineVersion,
+                1,
+                instances);
+
+        env.info.setDatabaseEngine(engine);
+        env.info.setDatabaseEngineVersion(engineVersion);
+        LOGGER.finer(
+            "Created a new RDS Instance " + env.rdsInstanceName + "." + env.rdsClusterDomain);
+      } catch (Exception e) {
+
+        LOGGER.finer("Error creating a RDS Instance " + env.rdsInstanceName + ". " + e.getMessage());
+
+        // remove cluster and instances
+        LOGGER.finer("Deleting RDS Instance " + env.rdsInstanceName);
+        env.auroraUtil.deleteMultiAzInstance();
+        LOGGER.finer("Deleted RDS Instance " + env.rdsInstanceName);
+
+        throw new RuntimeException(e);
+      }
+    }
+
+    int port = getPort(env.info.getRequest());
+    env.info.getDatabaseInfo().setInstanceEndpointSuffix(env.rdsClusterDomain, port);
+
+    env.info.getDatabaseInfo().getInstances().clear();
+    env.info.getDatabaseInfo().getInstances().addAll(instances);
+
+    authorizeIP(env);
+
+    final DatabaseEngineDeployment deployment = env.info.getRequest().getDatabaseEngineDeployment();
+    final DatabaseEngine engine = env.info.getRequest().getDatabaseEngine();
+
     if (DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER.equals(deployment) && DatabaseEngine.PG.equals(engine)) {
       DriverHelper.registerDriver(engine);
 
@@ -524,6 +717,7 @@ public class TestEnvironment implements AutoCloseable {
         return getAuroraDbEngine(request);
       case RDS:
       case RDS_MULTI_AZ_CLUSTER:
+      case RDS_MULTI_AZ_INSTANCE:
         return getRdsEngine(request);
       default:
         throw new NotImplementedException(request.getDatabaseEngineDeployment().toString());
@@ -558,6 +752,7 @@ public class TestEnvironment implements AutoCloseable {
         return getAuroraDbEngineVersion(env);
       case RDS:
       case RDS_MULTI_AZ_CLUSTER:
+      case RDS_MULTI_AZ_INSTANCE:
         return getRdsEngineVersion(env.info.getRequest());
       default:
         throw new NotImplementedException(env.info.getRequest().getDatabaseEngineDeployment().toString());
@@ -618,6 +813,7 @@ public class TestEnvironment implements AutoCloseable {
         return "db.r5.large";
       case RDS:
       case RDS_MULTI_AZ_CLUSTER:
+      case RDS_MULTI_AZ_INSTANCE:
         return "db.m5d.large";
       default:
         throw new NotImplementedException(request.getDatabaseEngine().toString());
@@ -638,7 +834,7 @@ public class TestEnvironment implements AutoCloseable {
 
   private static void initDatabaseParams(TestEnvironment env) {
     final String dbName =
-        !StringUtils.isNullOrEmpty(config.dbName)
+        config.dbName != null
             ? config.dbName
             : "test_database";
     final String dbUsername =
@@ -890,7 +1086,8 @@ public class TestEnvironment implements AutoCloseable {
 
   private static void configureIamAccess(TestEnvironment env) {
 
-    if (env.info.getRequest().getDatabaseEngineDeployment() != DatabaseEngineDeployment.AURORA) {
+    if (env.info.getRequest().getDatabaseEngineDeployment() != DatabaseEngineDeployment.AURORA
+        && env.info.getRequest().getDatabaseEngineDeployment() != DatabaseEngineDeployment.RDS_MULTI_AZ_INSTANCE) {
       throw new UnsupportedOperationException(
           env.info.getRequest().getDatabaseEngineDeployment().toString());
     }
@@ -900,7 +1097,7 @@ public class TestEnvironment implements AutoCloseable {
             ? config.iamUser
             : "jane_doe");
 
-    if (!env.reuseAuroraDbCluster) {
+    if (!env.reuseAuroraDbCluster && !env.reuseRdsDbInstance) {
       try {
         Class.forName(DriverHelper.getDriverClassname(env.info.getRequest().getDatabaseEngine()));
       } catch (ClassNotFoundException e) {
@@ -910,13 +1107,25 @@ public class TestEnvironment implements AutoCloseable {
             e);
       }
 
-      final String url =
-          String.format(
-              "%s%s:%d/%s",
-              DriverHelper.getDriverProtocol(env.info.getRequest().getDatabaseEngine()),
-              env.info.getDatabaseInfo().getClusterEndpoint(),
-              env.info.getDatabaseInfo().getClusterEndpointPort(),
-              env.info.getDatabaseInfo().getDefaultDbName());
+      String url;
+      if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.AURORA) {
+        url = String.format(
+                "%s%s:%d/%s",
+                DriverHelper.getDriverProtocol(env.info.getRequest().getDatabaseEngine()),
+                env.info.getDatabaseInfo().getClusterEndpoint(),
+                env.info.getDatabaseInfo().getClusterEndpointPort(),
+                env.info.getDatabaseInfo().getDefaultDbName());
+      } else if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_INSTANCE) {
+        url = String.format(
+            "%s%s:%d/%s",
+            DriverHelper.getDriverProtocol(env.info.getRequest().getDatabaseEngine()),
+            env.info.getDatabaseInfo().getInstances().get(0).getHost(),
+            env.info.getDatabaseInfo().getInstances().get(0).getPort(),
+            env.info.getDatabaseInfo().getDefaultDbName());
+      } else {
+        throw new UnsupportedOperationException(
+            env.info.getRequest().getDatabaseEngineDeployment().toString());
+      }
 
       try {
         env.auroraUtil.addAuroraAwsIamUser(
@@ -1040,8 +1249,21 @@ public class TestEnvironment implements AutoCloseable {
 
     switch (this.info.getRequest().getDatabaseEngineDeployment()) {
       case AURORA:
+        if (this.info.getRequest().getFeatures().contains(TestEnvironmentFeatures.BLUE_GREEN_DEPLOYMENT)
+            && !StringUtils.isNullOrEmpty(this.info.getBlueGreenDeploymentId())) {
+          deleteBlueGreenDeployment();
+        }
+        deleteDbCluster();
+        break;
       case RDS_MULTI_AZ_CLUSTER:
         deleteDbCluster();
+        break;
+      case RDS_MULTI_AZ_INSTANCE:
+        if (this.info.getRequest().getFeatures().contains(TestEnvironmentFeatures.BLUE_GREEN_DEPLOYMENT)
+            && !StringUtils.isNullOrEmpty(this.info.getBlueGreenDeploymentId())) {
+          deleteBlueGreenDeployment();
+        }
+        deleteMultiAzInstance();
         break;
       case RDS:
         throw new NotImplementedException(this.info.getRequest().getTargetJvm().toString());
@@ -1060,9 +1282,57 @@ public class TestEnvironment implements AutoCloseable {
     }
 
     if (!this.reuseAuroraDbCluster) {
-      LOGGER.finest("Deleting cluster " + this.auroraClusterName + ".cluster-" + this.auroraClusterDomain);
+      LOGGER.finest("Deleting cluster " + this.auroraClusterName + ".cluster-" + this.rdsClusterDomain);
       auroraUtil.deleteCluster(this.auroraClusterName);
-      LOGGER.finest("Deleted cluster " + this.auroraClusterName + ".cluster-" + this.auroraClusterDomain);
+      LOGGER.finest("Deleted cluster " + this.auroraClusterName + ".cluster-" + this.rdsClusterDomain);
+    }
+  }
+
+  private void deleteMultiAzInstance() {
+    if (!this.reuseRdsDbInstance && !StringUtils.isNullOrEmpty(this.runnerIP)) {
+      if (ipAddressUsageRefCount.decrementAndGet() == 0) {
+        // Another test environments are still in use of test task runner IP address.
+        // The last execute tst environment will do the cleanup.
+        auroraUtil.ec2DeauthorizesIP(runnerIP);
+      }
+    }
+
+    if (!this.reuseRdsDbInstance) {
+      LOGGER.finest("Deleting MultiAz Instance " + this.rdsInstanceName + "." + this.rdsClusterDomain);
+      auroraUtil.deleteMultiAzInstance(this.rdsInstanceName);
+      LOGGER.finest("Deleted MultiAz Instance " + this.rdsInstanceName + "." + this.rdsClusterDomain);
+    }
+  }
+
+  private void deleteBlueGreenDeployment() {
+
+    switch (this.info.getRequest().getDatabaseEngineDeployment()) {
+      case AURORA:
+        if (!this.reuseAuroraDbCluster) {
+          auroraUtil.deleteBlueGreenDeployment(this.info.getBlueGreenDeploymentId());
+          String old1ClusterName = this.auroraClusterName + "-old1";
+          if (auroraUtil.doesClusterExist(old1ClusterName)) {
+            auroraUtil.deleteCluster(old1ClusterName);
+          }
+          // TODO: delete green cluster if it still exists
+        }
+        break;
+      case RDS_MULTI_AZ_INSTANCE:
+        if (!this.reuseRdsDbInstance) {
+          BlueGreenDeployment blueGreenDeployment = auroraUtil.getBlueGreenDeployment(this.info.getBlueGreenDeploymentId());
+          auroraUtil.deleteBlueGreenDeployment(this.info.getBlueGreenDeploymentId());
+          String old1InstanceName = this.rdsInstanceName + "-old1";
+          if (auroraUtil.doesInstanceExist(old1InstanceName)) {
+            auroraUtil.deleteMultiAzInstance(old1InstanceName);
+          }
+          DBInstance greenInstance = auroraUtil.getRdsInstanceInfoByArn(blueGreenDeployment.target());
+          if (greenInstance != null) {
+            auroraUtil.deleteMultiAzInstance(greenInstance.dbInstanceIdentifier());
+          }
+        }
+        break;
+        default:
+          throw new RuntimeException("Unsupported " + this.info.getRequest().getDatabaseEngineDeployment());
     }
   }
 
@@ -1082,6 +1352,7 @@ public class TestEnvironment implements AutoCloseable {
             || preCreateInfo.request.getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER)) {
 
         // run environment creation in advance
+        // TODO: add support of RDS_MULTI_AZ_INSTANCE
         int finalIndex = index;
         LOGGER.finest(() -> String.format("Pre-create environment for [%d] - %s",
             finalIndex, preCreateInfo.request.getDisplayName()));
@@ -1094,8 +1365,7 @@ public class TestEnvironment implements AutoCloseable {
             initDatabaseParams(env);
             createDbCluster(env);
             if (env.info.getRequest().getFeatures().contains(TestEnvironmentFeatures.IAM)) {
-              if (env.info.getRequest().getDatabaseEngineDeployment()
-                  == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
+              if (env.info.getRequest().getDatabaseEngineDeployment() == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
                 throw new RuntimeException("IAM isn't supported by " + DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER);
               }
               configureIamAccess(env);
