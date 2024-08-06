@@ -265,7 +265,7 @@ public class TestEnvironment implements AutoCloseable {
       }
 
       // otherwise, create a new BG deployment
-      final String blueGreenId = env.auroraUtil.createBueGreenDeployment(
+      final String blueGreenId = env.auroraUtil.createBlueGreenDeployment(
           env.rdsInstanceName, clusterInfo.dbClusterArn());
       env.info.setBlueGreenDeploymentId(blueGreenId);
 
@@ -280,7 +280,7 @@ public class TestEnvironment implements AutoCloseable {
       }
 
       // otherwise, create a new BG deployment
-      final String blueGreenId = env.auroraUtil.createBueGreenDeployment(env.rdsInstanceName,
+      final String blueGreenId = env.auroraUtil.createBlueGreenDeployment(env.rdsInstanceName,
           instanceInfo.dbInstanceArn());
       env.info.setBlueGreenDeploymentId(blueGreenId);
 
