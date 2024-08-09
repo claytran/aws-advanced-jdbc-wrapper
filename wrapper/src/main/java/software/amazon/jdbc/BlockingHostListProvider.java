@@ -14,19 +14,13 @@
  * limitations under the License.
  */
 
-package software.amazon.jdbc.dialect;
+package software.amazon.jdbc;
 
-import java.util.Properties;
-import org.checkerframework.checker.nullness.qual.NonNull;
-import software.amazon.jdbc.HostListProvider;
-import software.amazon.jdbc.HostListProviderService;
-import software.amazon.jdbc.PluginService;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.concurrent.TimeoutException;
 
-@FunctionalInterface
-public interface HostListProviderSupplier {
-  @NonNull HostListProvider getProvider(
-      final @NonNull Properties properties,
-      final String initialUrl,
-      final @NonNull HostListProviderService hostListProviderService,
-      final @NonNull PluginService pluginService);
+public interface BlockingHostListProvider extends HostListProvider {
+  List<HostSpec> forceRefresh(final boolean writerImportant, final long timeoutMs)
+      throws SQLException, TimeoutException;
 }

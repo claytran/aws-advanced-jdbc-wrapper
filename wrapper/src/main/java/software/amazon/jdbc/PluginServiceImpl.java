@@ -30,6 +30,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -459,6 +460,30 @@ public class PluginServiceImpl implements PluginService, CanReleaseResources,
     }
   }
 
+  @Override
+  public boolean forceRefreshHostList(final boolean writerImportant, final long timeoutMs)
+      throws SQLException {
+
+    final HostListProvider hostListProvider = this.getHostListProvider();
+    if (!(hostListProvider instanceof BlockingHostListProvider)) {
+      throw new UnsupportedOperationException(
+          "HostList Provider is expected to implement HostListProvider2 interface.");
+    }
+
+    try {
+      final List<HostSpec> updatedHostList =
+          ((BlockingHostListProvider) hostListProvider).forceRefresh(writerImportant, timeoutMs);
+      if (updatedHostList != null) {
+        updateHostAvailability(updatedHostList);
+        setNodeList(this.hosts, updatedHostList);
+        return true;
+      }
+    } catch (TimeoutException ex) {
+      // do nothing
+    }
+    return false;
+  }
+
   void setNodeList(@Nullable final List<HostSpec> oldHosts,
       @Nullable final List<HostSpec> newHosts) {
 
@@ -601,7 +626,7 @@ public class PluginServiceImpl implements PluginService, CanReleaseResources,
     }
 
     final HostListProviderSupplier supplier = this.dialect.getHostListProvider();
-    this.setHostListProvider(supplier.getProvider(props, this.originalUrl, this));
+    this.setHostListProvider(supplier.getProvider(props, this.originalUrl, this, this));
   }
 
   @Override

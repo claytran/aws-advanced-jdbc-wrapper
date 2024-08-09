@@ -497,7 +497,6 @@ public class AuroraFailoverTest {
         TestEnvironment.getCurrent().getInfo().getDatabaseInfo().getInstance(initialWriterId);
 
     final Properties props = initDefaultProps();
-    props.setProperty("keepSessionStateOnFailover", "true");
 
     try (final Connection conn =
              DriverManager.getConnection(
@@ -555,9 +554,13 @@ public class AuroraFailoverTest {
 
   // Helper methods below
 
+  protected String getFailoverPlugin() {
+    return "failover";
+  }
+
   protected Properties initDefaultProps() {
     final Properties props = ConnectionStringHelper.getDefaultProperties();
-    props.setProperty(PropertyDefinition.PLUGINS.name, "failover");
+    props.setProperty(PropertyDefinition.PLUGINS.name, this.getFailoverPlugin());
     PropertyDefinition.CONNECT_TIMEOUT.set(props, "10000");
     PropertyDefinition.SOCKET_TIMEOUT.set(props, "10000");
     return props;
@@ -565,7 +568,7 @@ public class AuroraFailoverTest {
 
   protected Properties initDefaultProxiedProps() {
     final Properties props = ConnectionStringHelper.getDefaultProperties();
-    props.setProperty(PropertyDefinition.PLUGINS.name, "failover");
+    props.setProperty(PropertyDefinition.PLUGINS.name, this.getFailoverPlugin());
     PropertyDefinition.CONNECT_TIMEOUT.set(props, "10000");
     PropertyDefinition.SOCKET_TIMEOUT.set(props, "10000");
     AuroraHostListProvider.CLUSTER_INSTANCE_HOST_PATTERN.set(
@@ -590,7 +593,7 @@ public class AuroraFailoverTest {
 
     // Configure the driver-specific data source:
     Properties targetDataSourceProps = ConnectionStringHelper.getDefaultProperties();
-    targetDataSourceProps.setProperty("wrapperPlugins", "failover");
+    targetDataSourceProps.setProperty("wrapperPlugins", this.getFailoverPlugin());
 
     if (TestEnvironment.getCurrent().getCurrentDriver() == TestDriver.MARIADB
         && TestEnvironment.getCurrent().getInfo().getRequest().getDatabaseEngine()

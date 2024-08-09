@@ -99,7 +99,7 @@ public class RdsMultiAzDbClusterPgDialect extends PgDialect {
 
   @Override
   public HostListProviderSupplier getHostListProvider() {
-    return (properties, initialUrl, hostListProviderService) -> new RdsMultiAzDbClusterListProvider(
+    return (properties, initialUrl, hostListProviderService, pluginService) -> new RdsMultiAzDbClusterListProvider(
         properties,
         initialUrl,
         hostListProviderService,
