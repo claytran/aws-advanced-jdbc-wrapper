@@ -21,9 +21,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import software.amazon.jdbc.ConnectionPluginChainBuilder;
 import software.amazon.jdbc.exceptions.ExceptionHandler;
 import software.amazon.jdbc.exceptions.MultiAzDbClusterPgExceptionHandler;
 import software.amazon.jdbc.hostlistprovider.RdsMultiAzDbClusterListProvider;
+import software.amazon.jdbc.hostlistprovider.monitoring.MonitoringRdsMultiAzHostListProvider;
 import software.amazon.jdbc.util.DriverInfo;
 
 public class RdsMultiAzDbClusterPgDialect extends PgDialect {
@@ -99,14 +101,38 @@ public class RdsMultiAzDbClusterPgDialect extends PgDialect {
 
   @Override
   public HostListProviderSupplier getHostListProvider() {
-    return (properties, initialUrl, hostListProviderService, pluginService) -> new RdsMultiAzDbClusterListProvider(
-        properties,
-        initialUrl,
-        hostListProviderService,
-        TOPOLOGY_QUERY,
-        NODE_ID_QUERY,
-        IS_READER_QUERY,
-        FETCH_WRITER_NODE_QUERY,
-        FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+    return (properties, initialUrl, hostListProviderService, pluginService) -> {
+      final List<String> plugins = ConnectionPluginChainBuilder.getPluginCodes(properties);
+      boolean useFailover2 = plugins.stream()
+          .filter("failover2"::equals)
+          .map(x -> true)
+          .findFirst()
+          .orElse(false);
+
+      if (useFailover2) {
+        return new MonitoringRdsMultiAzHostListProvider(
+            properties,
+            initialUrl,
+            hostListProviderService,
+            TOPOLOGY_QUERY,
+            NODE_ID_QUERY,
+            IS_READER_QUERY,
+            pluginService,
+            FETCH_WRITER_NODE_QUERY,
+            FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+
+      } else {
+
+        return new RdsMultiAzDbClusterListProvider(
+            properties,
+            initialUrl,
+            hostListProviderService,
+            TOPOLOGY_QUERY,
+            NODE_ID_QUERY,
+            IS_READER_QUERY,
+            FETCH_WRITER_NODE_QUERY,
+            FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+      }
+    };
   }
 }

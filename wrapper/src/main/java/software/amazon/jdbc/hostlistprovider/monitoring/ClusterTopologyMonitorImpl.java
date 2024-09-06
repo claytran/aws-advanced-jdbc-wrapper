@@ -564,6 +564,7 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
     }
   }
 
+  // Returns a writer node ID if connected to a writer node. Returns null otherwise.
   protected String getWriterNodeId(final Connection connection) throws SQLException {
     try (final Statement stmt = connection.createStatement()) {
       try (final ResultSet resultSet = stmt.executeQuery(this.writerTopologyQuery)) {
@@ -588,9 +589,10 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
           new Object[] {e.getMessage()}));
     }
 
+    final String suggestedWriterNodeId = this.getSuggestedWriterNodeId(conn);
     try (final Statement stmt = conn.createStatement();
         final ResultSet resultSet = stmt.executeQuery(this.topologyQuery)) {
-      return this.processQueryResults(resultSet);
+      return this.processQueryResults(resultSet, suggestedWriterNodeId);
     } catch (final SQLSyntaxErrorException e) {
       throw new SQLException(Messages.get("ClusterTopologyMonitorImpl.invalidQuery"), e);
     } finally {
@@ -600,14 +602,21 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
     }
   }
 
-  protected List<HostSpec> processQueryResults(final ResultSet resultSet) throws SQLException {
+  protected String getSuggestedWriterNodeId(final Connection connection) throws SQLException {
+    // Aurora topology query can detect a writer for itself so it doesn't need any suggested writer node ID.
+    return null; // intentionally null
+  }
+
+  protected List<HostSpec> processQueryResults(
+      final ResultSet resultSet,
+      final String suggestedWriterNodeId) throws SQLException {
 
     final HashMap<String, HostSpec> hostMap = new HashMap<>();
 
     // Data is result set is ordered by last updated time so the latest records go last.
     // When adding hosts to a map, the newer records replace the older ones.
     while (resultSet.next()) {
-      final HostSpec host = createHost(resultSet);
+      final HostSpec host = createHost(resultSet, suggestedWriterNodeId);
       hostMap.put(host.getHost(), host);
     }
 
@@ -640,7 +649,12 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
     return hosts;
   }
 
-  protected HostSpec createHost(final ResultSet resultSet) throws SQLException {
+  protected HostSpec createHost(
+      final ResultSet resultSet,
+      final String suggestedWriterNodeId) throws SQLException {
+
+    // suggestedWriterNodeId is not used for Aurora clusters. Topology query can detect a writer for itself.
+
     // According to the topology query the result set
     // should contain 4 columns: node ID, 1/0 (writer/reader), CPU utilization, node lag in time.
     String hostName = resultSet.getString(1);
@@ -661,13 +675,13 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
   }
 
   protected HostSpec createHost(
-      String host,
+      String nodeName,
       final boolean isWriter,
       final long weight,
       final Timestamp lastUpdateTime) {
 
-    host = host == null ? "?" : host;
-    final String endpoint = getHostEndpoint(host);
+    nodeName = nodeName == null ? "?" : nodeName;
+    final String endpoint = getHostEndpoint(nodeName);
     final int port = this.clusterInstanceTemplate.isPortSpecified()
         ? this.clusterInstanceTemplate.getPort()
         : this.initialHostSpec.getPort();
@@ -680,8 +694,8 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
         .weight(weight)
         .lastUpdateTime(lastUpdateTime)
         .build();
-    hostSpec.addAlias(host);
-    hostSpec.setHostId(host);
+    hostSpec.addAlias(nodeName);
+    hostSpec.setHostId(nodeName);
     return hostSpec;
   }
 

@@ -37,7 +37,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
     TestEnvironmentFeatures.RUN_HIBERNATE_TESTS_ONLY,
     TestEnvironmentFeatures.RUN_AUTOSCALING_TESTS_ONLY})
 @EnableOnNumOfInstances(min = 2)
-@EnableOnDatabaseEngineDeployment(DatabaseEngineDeployment.AURORA) // TODO: MultiAz is failing
+//@EnableOnDatabaseEngineDeployment(DatabaseEngineDeployment.AURORA) // TODO: MultiAz is failing
 @MakeSureFirstInstanceWriter
 @Order(15)
 public class AuroraFailover2Test extends AuroraFailoverTest {

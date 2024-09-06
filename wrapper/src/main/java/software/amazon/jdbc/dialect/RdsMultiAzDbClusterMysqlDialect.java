@@ -24,8 +24,10 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Properties;
 import org.checkerframework.checker.nullness.qual.NonNull;
+import software.amazon.jdbc.ConnectionPluginChainBuilder;
 import software.amazon.jdbc.HostSpec;
 import software.amazon.jdbc.hostlistprovider.RdsMultiAzDbClusterListProvider;
+import software.amazon.jdbc.hostlistprovider.monitoring.MonitoringRdsMultiAzHostListProvider;
 import software.amazon.jdbc.plugin.failover.FailoverRestriction;
 import software.amazon.jdbc.util.DriverInfo;
 
@@ -93,15 +95,39 @@ public class RdsMultiAzDbClusterMysqlDialect extends MysqlDialect {
 
   @Override
   public HostListProviderSupplier getHostListProvider() {
-    return (properties, initialUrl, hostListProviderService, pluginService) -> new RdsMultiAzDbClusterListProvider(
-        properties,
-        initialUrl,
-        hostListProviderService,
-        TOPOLOGY_QUERY,
-        NODE_ID_QUERY,
-        IS_READER_QUERY,
-        FETCH_WRITER_NODE_QUERY,
-        FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+    return (properties, initialUrl, hostListProviderService, pluginService) -> {
+
+      final List<String> plugins = ConnectionPluginChainBuilder.getPluginCodes(properties);
+      boolean useFailover2 = plugins.stream()
+          .filter("failover2"::equals)
+          .map(x -> true)
+          .findFirst()
+          .orElse(false);
+
+      if (useFailover2) {
+        return new MonitoringRdsMultiAzHostListProvider(
+            properties,
+            initialUrl,
+            hostListProviderService,
+            TOPOLOGY_QUERY,
+            NODE_ID_QUERY,
+            IS_READER_QUERY,
+            pluginService,
+            FETCH_WRITER_NODE_QUERY,
+            FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+
+      } else {
+        return new RdsMultiAzDbClusterListProvider(
+            properties,
+            initialUrl,
+            hostListProviderService,
+            TOPOLOGY_QUERY,
+            NODE_ID_QUERY,
+            IS_READER_QUERY,
+            FETCH_WRITER_NODE_QUERY,
+            FETCH_WRITER_NODE_QUERY_COLUMN_NAME);
+      }
+    };
   }
 
   @Override

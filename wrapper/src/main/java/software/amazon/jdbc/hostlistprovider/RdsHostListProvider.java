@@ -93,7 +93,6 @@ public class RdsHostListProvider implements DynamicHostListProvider {
   protected static final CacheMap<String, String> suggestedPrimaryClusterIdCache = new CacheMap<>();
   protected static final CacheMap<String, Boolean> primaryClusterIdCache = new CacheMap<>();
 
-
   protected final HostListProviderService hostListProviderService;
   protected final String originalUrl;
   protected final String topologyQuery;

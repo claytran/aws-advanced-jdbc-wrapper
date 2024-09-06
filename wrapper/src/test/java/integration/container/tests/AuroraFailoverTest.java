@@ -44,6 +44,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,7 +71,7 @@ import software.amazon.jdbc.util.SqlState;
     TestEnvironmentFeatures.RUN_HIBERNATE_TESTS_ONLY,
     TestEnvironmentFeatures.RUN_AUTOSCALING_TESTS_ONLY})
 @EnableOnNumOfInstances(min = 2)
-@EnableOnDatabaseEngineDeployment(DatabaseEngineDeployment.AURORA) // TODO: MultiAz is failing
+//@EnableOnDatabaseEngineDeployment(DatabaseEngineDeployment.AURORA) // TODO: MultiAz is failing
 @MakeSureFirstInstanceWriter
 @Order(14)
 public class AuroraFailoverTest {
@@ -423,9 +424,35 @@ public class AuroraFailoverTest {
 
       // Execute Query again to get the current connection id;
       final String currentConnectionId = auroraUtil.queryInstanceId(conn);
+      LOGGER.fine("currentConnectionId: " + currentConnectionId);
 
       // Assert that we are connected to the new writer after failover happens.
-      List<String> instanceIDs = auroraUtil.getAuroraInstanceIds();
+      List<String> instanceIDs = null;
+      for (TestInstanceInfo instanceInfo : TestEnvironment.getCurrent().getInfo().getDatabaseInfo().getInstances()) {
+        if (instanceInfo == initialWriterInstanceInfo
+            && TestEnvironment.getCurrent().getInfo().getRequest().getDatabaseEngineDeployment()
+                == DatabaseEngineDeployment.RDS_MULTI_AZ_CLUSTER) {
+          // Old writer node for RDS MultiAz clusters (usually) isn't available for a long time after failover.
+          // Let's skip this node and fetch topology from another node.
+          continue;
+        }
+        try {
+          instanceIDs = auroraUtil.getAuroraInstanceIds(
+              TestEnvironment.getCurrent().getInfo().getRequest().getDatabaseEngine(),
+              TestEnvironment.getCurrent().getInfo().getRequest().getDatabaseEngineDeployment(),
+              ConnectionStringHelper.getUrl(
+                  instanceInfo.getHost(), instanceInfo.getPort(),
+                  TestEnvironment.getCurrent().getInfo().getDatabaseInfo().getDefaultDbName()),
+              TestEnvironment.getCurrent().getInfo().getDatabaseInfo().getUsername(),
+              TestEnvironment.getCurrent().getInfo().getDatabaseInfo().getPassword());
+          if (!instanceIDs.isEmpty()) {
+            break;
+          }
+        } catch (SQLException ex) {
+          // do nothing
+        }
+      }
+
       assertTrue(instanceIDs.size() > 0);
       final String nextWriterId = instanceIDs.get(0);
 
