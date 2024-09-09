@@ -1,23 +1,23 @@
 # Failover Plugin v2
-The AWS Advanced JDBC Driver uses the Failover Plugin v2 to provide minimal downtime in the event of a DB instance failure. The plugin is a next version (v2) of [Failover Plugin](./UsingTheFailoverPlugin.md) and most of the explanations and suggestions for Failover Plugin are applicable to Failover Plugin v2 (unless opposite is explicitly stated).
+The AWS Advanced JDBC Driver uses the Failover Plugin v2 to provide minimal downtime in the event of a DB instance failure. The plugin is the next version (v2) of the [Failover Plugin](./UsingTheFailoverPlugin.md) and unless explicitly stated otherwise, most of the information and suggestions for the Failover Plugin are applicable to the Failover Plugin v2.
 
-## Differences between Failover Plugin and Failover Plugin v2
+## Differences between the Failover Plugin and the Failover Plugin v2
 
-Failover Plugin performs a failover process for each DB connection, and it's triggered independently and unrelated to failover processes in other connections. While such independence between failover processes bring some benefits, it also leads to additional resources like extra threads. If dozens of DB connections are being failed over at the same time, it may cause significant load on a client environment.
+The Failover Plugin performs a failover process for each DB connection. Each failover process is triggered independently and is unrelated to failover processes in other connections. While such independence between failover processes has some benefits, it also leads to additional resources like extra threads. If dozens of DB connections are failing over at the same time, it may cause significant load on a client environment.
 
 <div style="text-align:center"><img src="../../images/failover1.jpg" /></div>
 <i>Picture 1. Each connection triggers its own failover process to detect a new writer.</i>
 <br><br>
 
-If connection needs to get a latest topology, it calls `RdsHostListProvider`. It should be noted that `RdsHostListProvider` runs in the same thread as a connection failover process. As shown on _Picture 1_ above, different connections start and end their failover processes independently.
+If a connection needs to get the latest topology, it calls `RdsHostListProvider`. It should be noted that `RdsHostListProvider` runs in the same thread as a connection failover process. As shown in _Picture 1_ above, different connections start and end their failover processes independently.
 
-Failover Plugin v2 uses an optimized approach when a process of detecting and confirming of a cluster topology is delegated to central topology monitoring component that runs in a separate thread. When topology is confirmed and a new writer is detected, each of waiting connection can resume and reconnect to a required node. Such design helps to minimize resources required for failover processing. It scales better comparing to Failover Plugin.
+The Failover Plugin v2 uses an optimized approach where the process of detecting and confirming a cluster topology is delegated to a central topology monitoring component that runs in a separate thread. When the topology is confirmed and a new writer is detected, each waiting connection can resume and reconnect to a required node. This design helps minimize resources required for failover processing and scales better compared to the Failover Plugin.
 
 <div style="text-align:center"><img src="../../images/failover2.jpg" /></div>
-<i>Picture 2. Connections call MonitoringRdsHostListProvider and delegate it a new writer detection. While waiting for MonitoringRdsHostListProvider, connection threads suspend.</i>
+<i>Picture 2. Connections call MonitoringRdsHostListProvider, which is responsible for detecting the new writer. While waiting for MonitoringRdsHostListProvider, connection threads suspend.</i>
 <br><br>
 
-If two connections get communication issue with their internal (physical) DB connections, each connection may request a topology monitoring component (`MonitoringRdsHostListProvider` on a _Picture 2_) to provide a new writer. Both connections are notified as soon as a latest topology gets available. Connection threads can resume and continue with their suspended workflows and to reconnect to a reader or a writer node. 
+If two connections encounter communication issues with their internal (physical) DB connections, each connection may send a request to the topology monitoring component (`MonitoringRdsHostListProvider` in _Picture 2_) for updated topology information reflecting the new writer. Both connections are notified as soon as the latest topology is available. Connection threads can resume, continue with their suspended workflows, and reconnect to a reader or a writer node as needed.
 
 The topology monitoring component mentioned above (`MonitoringRdsHostListProvider`) updates topology periodically. Usually it uses a connection to a writer node to fetch a cluster topology. Using a connection to a writer node allows to get topology from the first hand without a risk of getting stale data as in case of fetching it from a reader. In some exceptional cases the monitoring component may (temporarily) use a reader connection to fetch a topology however it switch back to a writer node as soon as possible.
 
@@ -25,9 +25,9 @@ The topology monitoring component mentioned above (`MonitoringRdsHostListProvide
 <i>Picture 3. MonitoringRdsHostListProvider detects a new writer by establishing connections to nodes in separate threads.</i> 
 <br><br>
 
-When cluster topology needs to be confirmed, the monitoring component opens new threads, one for each node (see _Picture 3_). Each of these threads try to connect to a node and to check if node is a writer. Aurora clusters architected the way that a writer node gets updated first and provides a true topology. Other nodes connect to a new writer shortly after and update their local copies of topology. When reading topology from a reader node, it's quite possible to get a stale topology for some short time after failover. You can see a typical stale topology on a diagram above, thread `instance-3`, box `Topology` to the right. The topology shows that `instance-3` is still a writer there. 
+When the cluster topology needs to be confirmed, the monitoring component opens new threads, one for each node (see _Picture 3_). Each of these threads tries to connect to a node and checks if the node is a writer. Aurora clusters are architected in a way such that a writer node gets updated first and provides the true topology. Other nodes connect to a new writer shortly after and they update their local copies of the topology. When reading the topology from a reader node, it's quite possible to get a stale topology for a short time period after failover. You can see a typical stale topology on a diagram above, thread `instance-3`, box `Topology` to the right. The topology shows that `instance-3` is still a writer there.
 
-Threads stop when a new writer is detected. 30s after a new writer is detected (and after all waiting connections have been notified), topology continues to be updated with a high rate. It guarantees that all readers appear in topology. Usually 30s is enough time to complete a cluster failover and to get a stable cluster topology. 
+TThe threads monitoring the topology stop when a new writer is detected. For 30 seconds after a new writer is detected (and after all waiting connections have been notified), topology continues to be updated at an increased rate. This allows time for all readers to appear in the topology, since 30 seconds is usually enough time for cluster failover to complete and cluster topology to stabilize.
 
 All improvements mentioned above help Failover Plugin v2 to perform with a better performance and less resources. 
 
@@ -72,5 +72,5 @@ Please refer to [Failover Plugin](./UsingTheFailoverPlugin.md) for more details 
 ### Sample Code
 [PostgreSQL Failover Sample Code](./../../../examples/AWSDriverExample/src/main/java/software/amazon/PgFailoverSample.java)
 
-This sample code uses `failover` plugin. However, it could be used with `failover2` plugin. Configuration parameters should be adjusted in accordance to the table above. 
+This sample code uses the original `failover` plugin, but it can also be used with the `failover2` plugin. Configuration parameters should be adjusted in accordance with the table above. 
 
