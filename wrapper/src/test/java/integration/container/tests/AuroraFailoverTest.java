@@ -49,6 +49,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
@@ -415,6 +416,9 @@ public class AuroraFailoverTest {
     try (final Connection conn =
         createDataSourceConnectionWithFailoverUsingInstanceId(
             initialWriterInstanceInfo.getHost())) {
+
+      // Let all monitoring threads to start up
+      TimeUnit.SECONDS.sleep(30);
 
       // Trigger failover
       auroraUtil.failoverClusterToATargetAndWaitUntilWriterChanged(

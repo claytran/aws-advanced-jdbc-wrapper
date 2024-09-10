@@ -109,6 +109,9 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
   protected final ExecutorService monitorExecutor = Executors.newSingleThreadExecutor(runnableTarget -> {
     final Thread monitoringThread = new Thread(runnableTarget);
     monitoringThread.setDaemon(true);
+    if (!StringUtils.isNullOrEmpty(monitoringThread.getName())) {
+      monitoringThread.setName(monitoringThread.getName() + "-m");
+    }
     return monitoringThread;
   });
 
@@ -721,6 +724,10 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
       this.monitor = monitor;
       this.hostSpec = hostSpec;
       this.writerHostSpec = writerHostSpec;
+
+      if (!StringUtils.isNullOrEmpty(this.getName())) {
+        this.setName(this.getName() + "-nm");
+      }
     }
 
     @Override
@@ -783,7 +790,7 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
               connection = null;
               return;
 
-            } else {
+            } else if (connection != null) {
               // this connection is a reader connection
               if (this.monitor.nodeThreadsWriterConnection.get() == null) {
                 // while writer connection isn't yet established this reader connection may update topology
@@ -812,6 +819,10 @@ public class ClusterTopologyMonitorImpl implements ClusterTopologyMonitor {
     }
 
     private void readerThreadFetchTopology(final Connection connection, final @Nullable HostSpec writerHostSpec) {
+      if (connection == null) {
+        return;
+      }
+
       List<HostSpec> hosts;
       try {
         hosts = this.monitor.queryForTopology(connection);
